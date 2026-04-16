@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: spacesync
+    env: node
+    rootDir: .
+    buildCommand: cd server && npm install && cd ../client && npm install && npm run build
+    startCommand: cd server && npm start
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: MONGO_URI
+        sync: false
+      - key: CLIENT_ORIGIN
+        sync: false

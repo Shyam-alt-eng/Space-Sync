@@ -77,6 +77,49 @@ exit the vs code by deleting all the terminal and reopen it.
 npm --prefix client run build
 ```
 
+## Deploy (Recommended: Render, Single Service)
+
+This project is ready to run as one Node service where Express serves the built React app.
+
+1. Push this repo to GitHub.
+2. Create a new **Web Service** on Render.
+3. Use these commands:
+
+```bash
+# Build Command
+cd server && npm install && cd ../client && npm install && npm run build
+
+# Start Command
+cd server && npm start
+```
+
+4. Set environment variables in Render:
+
+```bash
+NODE_ENV=production
+MONGO_URI=<your mongodb uri>
+CLIENT_ORIGIN=<your render app url>
+```
+
+Notes:
+- `PORT` is set automatically by Render.
+- Frontend API defaults to same-origin in production, so no `VITE_API_URL` is required in single-service deploy.
+
+## Deploy (Alternative: Split Frontend + Backend)
+
+- Backend: deploy `server/` to Render/Railway.
+- Frontend: deploy `client/` to Vercel/Netlify.
+
+For split deploy, set:
+
+```bash
+# frontend environment variable
+VITE_API_URL=https://your-backend-domain.com
+
+# backend environment variable
+CLIENT_ORIGIN=https://your-frontend-domain.com
+```
+
 ## Notes for Mobile Offline Use
 
 - The app should be opened once while online so assets/cache are stored.

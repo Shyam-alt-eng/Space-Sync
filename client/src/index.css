@@ -1,0 +1,43 @@
+@import url("https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap");
+
+:root {
+  --text: #132746;
+  --muted: #4f5f78;
+  --line: #dbe5f4;
+  --panel: #f7fbff;
+  --bg:
+    linear-gradient(180deg, #12232a 0%, #2f3a32 28%, #545748 48%, #db9f75 70%, #804012 86%, #3e2411 100%);
+  --heading-font: "Chakra Petch", "Segoe UI", sans-serif;
+  --body-font: "Chakra Petch", "Segoe UI", sans-serif;
+  --mono-font: "IBM Plex Mono", Consolas, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  color: var(--text);
+  background: var(--bg);
+  background-attachment: fixed;
+  background-repeat: no-repeat;
+  background-size: cover;
+  font-family: var(--body-font);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+  font-family: var(--heading-font);
+  letter-spacing: 0.01em;
+}

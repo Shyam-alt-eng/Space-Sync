@@ -227,6 +227,7 @@
   font-size: 14px;
   color: #2f2d28;
   word-break: break-word;
+  white-space: pre-wrap;
 }
 
 .bubble time {
@@ -404,16 +405,21 @@
   box-shadow: 0 12px 26px rgba(38, 26, 18, 0.16);
 }
 
-.composer-bar input {
+.composer-bar textarea {
   border: none;
   background: transparent;
-  padding: 8px 10px;
+  padding: 10px;
   font-size: 15px;
   color: #3f3025;
   outline: none;
+  flex: 1;
+  resize: none;
+  height: 44px;
+  box-sizing: border-box;
+  font-family: inherit;
 }
 
-.composer-bar input::placeholder {
+.composer-bar textarea::placeholder {
   color: #7b6758;
 }
 
@@ -586,3 +592,203 @@
   }
 }
 
+/* --- Access Control & Admin Styles --- */
+.lock-screen-wrapper {
+  position: absolute;
+  inset: 0;
+  background: rgba(12, 18, 35, 0.6);
+  backdrop-filter: blur(12px);
+  z-index: 50;
+  display: grid;
+  place-items: center;
+}
+
+.lock-card {
+  background: #fdf5ec;
+  border-radius: 20px;
+  padding: 30px;
+  width: 90%;
+  max-width: 400px;
+  box-shadow: 0 20px 40px rgba(0,0,0,0.4);
+  text-align: center;
+  border: 1px solid rgba(219, 159, 117, 0.4);
+}
+
+.lock-card h2 {
+  margin: 0 0 10px;
+  color: #3f2e21;
+}
+
+.lock-card p {
+  color: #6a5a4e;
+  font-size: 14px;
+  margin-bottom: 20px;
+}
+
+.lock-input {
+  width: 100%;
+  border: 1px solid rgba(219, 159, 117, 0.5);
+  padding: 12px;
+  border-radius: 10px;
+  margin-bottom: 15px;
+  font-size: 15px;
+  background: #fff;
+  box-sizing: border-box;
+}
+
+.lock-btn {
+  width: 100%;
+  padding: 12px;
+  border: none;
+  border-radius: 10px;
+  background: linear-gradient(145deg, #804012, #3e2411);
+  color: #fcece0;
+  font-weight: 600;
+  cursor: pointer;
+  font-size: 16px;
+  transition: opacity 0.2s;
+}
+
+.lock-btn:hover {
+  opacity: 0.9;
+}
+
+.lock-alt {
+  margin-top: 15px;
+  background: transparent;
+  border: none;
+  color: #804012;
+  font-size: 13px;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.admin-btn {
+  background: transparent;
+  color: #db9f75;
+  border: 1px solid rgba(219, 159, 117, 0.5);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.admin-btn:hover {
+  background: rgba(219, 159, 117, 0.15);
+}
+
+.admin-modal-wrapper {
+  position: absolute;
+  inset: 0;
+  background: rgba(0,0,0,0.5);
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+}
+
+.admin-modal {
+  background: #fdf5ec;
+  border-radius: 20px;
+  width: 100%;
+  max-width: 600px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 30px 60px rgba(0,0,0,0.5);
+}
+
+.admin-header {
+  padding: 15px 20px;
+  background: linear-gradient(120deg, #3e2411, #804012);
+  color: #fdf5ec;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.admin-header h3 { margin: 0; }
+
+.admin-close {
+  background: transparent;
+  border: none;
+  color: #fff;
+  font-size: 24px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.admin-tabs {
+  display: flex;
+  background: #eacdbe;
+}
+
+.admin-tab {
+  flex: 1;
+  padding: 12px;
+  text-align: center;
+  background: transparent;
+  border: none;
+  border-bottom: 3px solid transparent;
+  font-weight: 600;
+  color: #55493f;
+  cursor: pointer;
+}
+
+.admin-tab.active {
+  border-bottom-color: #804012;
+  color: #804012;
+  background: #fdf5ec;
+}
+
+.admin-content {
+  padding: 20px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.device-row, .audit-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px;
+  border-bottom: 1px solid rgba(219, 159, 117, 0.3);
+  font-size: 14px;
+}
+
+.device-row:last-child, .audit-row:last-child {
+  border-bottom: none;
+}
+
+.device-info h4 { margin: 0 0 4px; color: #3f2e21; }
+.device-info span { font-size: 12px; color: #6a5a4e; }
+
+.device-status {
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+.device-status.pending { background: #fee2e2; color: #991b1b; }
+.device-status.approved { background: #dcfce7; color: #166534; }
+.device-status.rejected { background: #f3f4f6; color: #4b5563; }
+
+.audit-info h4 { margin: 0 0 4px; color: #3f2e21; }
+.audit-info span { font-size: 12px; color: #6a5a4e; text-transform: uppercase; font-weight: 600; }
+.audit-actions { display: flex; gap: 8px; align-items: center; }
+
+.btn-small {
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: none;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn-small.approve { background: #166534; color: white; }
+.btn-small.revoke { background: #991b1b; color: white; }
+.btn-small.undo { background: #ca8a04; color: white; }
+.btn-small.delete { background: #4b5563; color: white; }

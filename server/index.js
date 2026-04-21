@@ -8,16 +8,30 @@ const { Server } = require("socket.io");
 const path = require("path");
 const fs = require("fs");
 
+mongoose.set("bufferCommands", false);
+
 const PORT = Number(process.env.PORT || 5000);
 const MONGO_URI = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/spacesync";
 const normalizeOrigin = (origin) => origin.trim().replace(/\/+$/, "");
 const rawClientOrigin = process.env.CLIENT_ORIGIN || "*";
-const CLIENT_ORIGIN = rawClientOrigin === "*"
+const configuredOrigins = rawClientOrigin === "*"
   ? "*"
   : rawClientOrigin
       .split(",")
       .map((origin) => normalizeOrigin(origin))
       .filter(Boolean);
+const devOrigins = [
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  "http://localhost:4173",
+  "http://127.0.0.1:4173",
+];
+const CLIENT_ORIGIN = configuredOrigins === "*"
+  ? "*"
+  : Array.from(new Set([
+      ...configuredOrigins,
+      ...(process.env.NODE_ENV === "production" ? [] : devOrigins),
+    ]));
 const ADMIN_SECRET = process.env.ADMIN_SECRET || "admin";
 const uploadsDir = path.join(__dirname, "uploads");
 
@@ -28,9 +42,40 @@ if (!fs.existsSync(uploadsDir)) {
 const app = express();
 const server = http.createServer(app);
 
+const defaultUserPermissions = {
+  canRead: true,
+  canWrite: true,
+  canDelete: false,
+};
+
+const adminPermissions = {
+  canRead: true,
+  canWrite: true,
+  canDelete: true,
+};
+
+const isDevelopment = process.env.NODE_ENV !== "production";
+
+const isDevViteOrigin = (origin) => {
+  if (!origin || !isDevelopment) return false;
+  try {
+    const parsed = new URL(origin);
+    const host = parsed.hostname;
+    const port = parsed.port;
+    const isHttp = parsed.protocol === "http:";
+    const isLoopback = host === "localhost" || host === "127.0.0.1";
+    const isLanIp = /^\d{1,3}(\.\d{1,3}){3}$/.test(host);
+    const isVitePort = port === "5173" || port === "4173";
+    return isHttp && isVitePort && (isLoopback || isLanIp);
+  } catch {
+    return false;
+  }
+};
+
 const isAllowedOrigin = (origin) => {
   if (CLIENT_ORIGIN === "*") return true;
   if (!origin) return true;
+  if (isDevViteOrigin(origin)) return true;
   return CLIENT_ORIGIN.includes(normalizeOrigin(origin));
 };
 
@@ -41,11 +86,20 @@ const corsOriginOption = CLIENT_ORIGIN === "*"
         callback(null, true);
         return;
       }
-      callback(new Error("Not allowed by CORS"));
+      console.warn(`CORS blocked origin: ${origin || "unknown"}`);
+      callback(null, false);
     };
 
 const io = new Server(server, {
-  cors: { origin: CLIENT_ORIGIN },
+  cors: {
+    origin: (origin, callback) => {
+      if (isAllowedOrigin(origin)) {
+        callback(null, true);
+        return;
+      }
+      callback(new Error("Not allowed by CORS"));
+    },
+  },
 });
 
 app.use(cors({ origin: corsOriginOption }));
@@ -60,7 +114,12 @@ const deviceSchema = new mongoose.Schema({
   deviceId: { type: String, required: true, unique: true },
   name: { type: String, required: true },
   status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
-  isAdmin: { type: Boolean, default: false }
+  isAdmin: { type: Boolean, default: false },
+  permissions: {
+    canRead: { type: Boolean, default: true },
+    canWrite: { type: Boolean, default: true },
+    canDelete: { type: Boolean, default: true },
+  }
 }, { timestamps: true });
 
 const collectionSchema = new mongoose.Schema({
@@ -147,13 +206,52 @@ const toClientNote = (doc) => ({
   isDeleted: doc.isDeleted
 });
 
+const getDevicePermissions = (device) => {
+  if (!device) return { ...defaultUserPermissions };
+  if (device.isAdmin) return { ...adminPermissions };
+  return {
+    canRead: device.permissions?.canRead !== false,
+    canWrite: device.permissions?.canWrite !== false,
+    canDelete: device.permissions?.canDelete !== false,
+  };
+};
+
+const isDbReady = () => mongoose.connection.readyState === 1;
+
+const ensureDbReady = (req, res, next) => {
+  if (isDbReady()) {
+    next();
+    return;
+  }
+  res.status(503).json({ error: "Server is starting. Please retry in a few seconds." });
+};
+
 const checkAccess = async (req, res, next) => {
   const deviceId = req.headers['x-device-id'];
   if (!deviceId) return res.status(401).json({ error: "Missing device ID" });
   const device = await Device.findOne({ deviceId });
   if (!device || device.status !== 'approved') return res.status(403).json({ error: "Unauthorized" });
+  const permissions = getDevicePermissions(device);
+  if (!permissions.canRead) return res.status(403).json({ error: "Read access denied" });
   req.device = device;
+  req.permissions = permissions;
   next();
+};
+
+const checkWriteAccess = (req, res, next) => {
+  if (req.permissions?.canWrite) {
+    next();
+    return;
+  }
+  res.status(403).json({ error: "Write access denied" });
+};
+
+const checkDeleteAccess = (req, res, next) => {
+  if (req.permissions?.canDelete) {
+    next();
+    return;
+  }
+  res.status(403).json({ error: "Delete access denied" });
 };
 
 const checkAdmin = async (req, res, next) => {
@@ -169,19 +267,35 @@ app.get("/health", (req, res) => res.json({ status: "ok" }));
 
 // --- Access API ---
 app.post("/access/verify", async (req, res) => {
+  if (!isDbReady()) {
+    return res.status(503).json({ status: 'loading', error: "Database is not ready" });
+  }
   const { deviceId } = req.body;
   if (!deviceId) return res.status(400).json({ error: "Missing deviceId" });
   const device = await Device.findOne({ deviceId });
   if (!device) return res.json({ status: 'new' });
-  return res.json({ status: device.status, isAdmin: device.isAdmin, name: device.name });
+  return res.json({
+    status: device.status,
+    isAdmin: device.isAdmin,
+    name: device.name,
+    permissions: getDevicePermissions(device),
+  });
 });
 
 app.post("/access/request", async (req, res) => {
+  if (!isDbReady()) {
+    return res.status(503).json({ error: "Server is starting. Please retry in a few seconds." });
+  }
   const { deviceId, name } = req.body;
   if (!deviceId || !name) return res.status(400).json({ error: "Missing fields" });
   let device = await Device.findOne({ deviceId });
   if (!device) {
-    device = await Device.create({ deviceId, name, status: 'pending' });
+    device = await Device.create({
+      deviceId,
+      name,
+      status: 'pending',
+      permissions: { ...defaultUserPermissions },
+    });
   } else {
     device.name = name;
     device.status = 'pending';
@@ -192,40 +306,93 @@ app.post("/access/request", async (req, res) => {
 });
 
 app.post("/access/admin", async (req, res) => {
+  if (!isDbReady()) {
+    return res.status(503).json({ error: "Server is starting. Please retry in a few seconds." });
+  }
   const { deviceId, name, secret } = req.body;
   if (secret !== ADMIN_SECRET) return res.status(403).json({ error: "Invalid secret" });
   let device = await Device.findOne({ deviceId });
   if (!device) {
-    device = await Device.create({ deviceId, name: name || "Admin Device", status: 'approved', isAdmin: true });
+    device = await Device.create({
+      deviceId,
+      name: name || "Admin Device",
+      status: 'approved',
+      isAdmin: true,
+      permissions: { ...adminPermissions },
+    });
   } else {
     device.status = 'approved';
     device.isAdmin = true;
+    device.permissions = { ...adminPermissions };
     await device.save();
   }
-  return res.json({ status: 'approved', isAdmin: true });
+  return res.json({ status: 'approved', isAdmin: true, permissions: { ...adminPermissions } });
 });
 
 // Admin management endpoints
-app.get("/admin/devices", checkAdmin, async (req, res) => {
+app.get("/admin/devices", ensureDbReady, checkAdmin, async (req, res) => {
   const devices = await Device.find().sort({ createdAt: -1 });
   res.json(devices);
 });
 
-app.post("/admin/devices/:deviceId/approve", checkAdmin, async (req, res) => {
-  const device = await Device.findOneAndUpdate({ deviceId: req.params.deviceId }, { status: 'approved' }, { new: true });
+app.post("/admin/devices/:deviceId/approve", ensureDbReady, checkAdmin, async (req, res) => {
+  const device = await Device.findOneAndUpdate(
+    { deviceId: req.params.deviceId },
+    {
+      status: 'approved',
+      $setOnInsert: { permissions: { ...defaultUserPermissions } },
+    },
+    { new: true }
+  );
   if (!device) return res.status(404).json({ error: "Device not found" });
+  if (!device.permissions) {
+    device.permissions = { ...defaultUserPermissions };
+    await device.save();
+  }
   io.emit(`access:approved:${device.deviceId}`);
   res.json(device);
 });
 
-app.post("/admin/devices/:deviceId/revoke", checkAdmin, async (req, res) => {
+app.post("/admin/devices/:deviceId/revoke", ensureDbReady, checkAdmin, async (req, res) => {
   const device = await Device.findOneAndUpdate({ deviceId: req.params.deviceId }, { status: 'rejected' }, { new: true });
   if (!device) return res.status(404).json({ error: "Device not found" });
+  if (device.isAdmin) return res.status(400).json({ error: "Cannot revoke an admin device" });
   io.emit("access:revoked", { deviceId: device.deviceId });
   res.json(device);
 });
 
-app.get("/admin/audit", checkAdmin, async (req, res) => {
+app.delete("/admin/devices/:deviceId", ensureDbReady, checkAdmin, async (req, res) => {
+  const device = await Device.findOne({ deviceId: req.params.deviceId });
+  if (!device) return res.status(404).json({ error: "Device not found" });
+  if (device.isAdmin) return res.status(400).json({ error: "Cannot remove an admin device" });
+
+  await Device.deleteOne({ deviceId: req.params.deviceId });
+  io.emit("access:revoked", { deviceId: req.params.deviceId });
+  res.json({ success: true, deviceId: req.params.deviceId });
+});
+
+app.patch("/admin/devices/:deviceId/permissions", ensureDbReady, checkAdmin, async (req, res) => {
+  const { canRead, canWrite, canDelete } = req.body;
+  const device = await Device.findOne({ deviceId: req.params.deviceId });
+  if (!device) return res.status(404).json({ error: "Device not found" });
+  if (device.isAdmin) return res.status(400).json({ error: "Admin permissions cannot be changed" });
+
+  const nextPermissions = {
+    canRead: canRead !== undefined ? Boolean(canRead) : device.permissions?.canRead !== false,
+    canWrite: canWrite !== undefined ? Boolean(canWrite) : device.permissions?.canWrite !== false,
+    canDelete: canDelete !== undefined ? Boolean(canDelete) : device.permissions?.canDelete !== false,
+  };
+
+  if (nextPermissions.canDelete && !nextPermissions.canWrite) {
+    return res.status(400).json({ error: "Delete permission requires write permission" });
+  }
+
+  device.permissions = nextPermissions;
+  await device.save();
+  res.json(device);
+});
+
+app.get("/admin/audit", ensureDbReady, checkAdmin, async (req, res) => {
   const logs = await AuditLog.find().sort({ createdAt: -1 }).limit(100).lean();
   
   const deviceIds = [...new Set(logs.map(l => l.deviceId))];
@@ -239,7 +406,7 @@ app.get("/admin/audit", checkAdmin, async (req, res) => {
   res.json(enrichedLogs);
 });
 
-app.post("/admin/undo/:logId", checkAdmin, async (req, res) => {
+app.post("/admin/undo/:logId", ensureDbReady, checkAdmin, async (req, res) => {
   const log = await AuditLog.findById(req.params.logId);
   if (!log) return res.status(404).json({ error: "Log not found" });
 
@@ -262,7 +429,7 @@ app.post("/admin/undo/:logId", checkAdmin, async (req, res) => {
   res.json({ success: true });
 });
 
-app.delete("/admin/permanent/:logId", checkAdmin, async (req, res) => {
+app.delete("/admin/permanent/:logId", ensureDbReady, checkAdmin, async (req, res) => {
   const log = await AuditLog.findById(req.params.logId);
   if (!log) return res.status(404).json({ error: "Log not found" });
 
@@ -282,7 +449,7 @@ app.delete("/admin/permanent/:logId", checkAdmin, async (req, res) => {
 });
 
 // --- Collections API ---
-app.post("/collections", checkAccess, async (req, res) => {
+app.post("/collections", ensureDbReady, checkAccess, checkWriteAccess, async (req, res) => {
   try {
     const { name, description } = req.body;
     if (!name) return res.status(400).json({ error: "Collection name required" });
@@ -293,7 +460,7 @@ app.post("/collections", checkAccess, async (req, res) => {
   }
 });
 
-app.get("/collections", checkAccess, async (req, res) => {
+app.get("/collections", ensureDbReady, checkAccess, async (req, res) => {
   try {
     const collections = await Collection.find().sort({ createdAt: -1 });
     return res.json(collections.map(toClientCollection));
@@ -302,7 +469,7 @@ app.get("/collections", checkAccess, async (req, res) => {
   }
 });
 
-app.patch("/collections/:id", checkAccess, async (req, res) => {
+app.patch("/collections/:id", ensureDbReady, checkAccess, checkWriteAccess, async (req, res) => {
   try {
     const { name, description } = req.body;
     const collection = await Collection.findByIdAndUpdate(
@@ -317,7 +484,7 @@ app.patch("/collections/:id", checkAccess, async (req, res) => {
   }
 });
 
-app.delete("/collections/:id", checkAccess, async (req, res) => {
+app.delete("/collections/:id", ensureDbReady, checkAccess, checkDeleteAccess, async (req, res) => {
   try {
     const collection = await Collection.findByIdAndDelete(req.params.id);
     if (!collection) return res.status(404).json({ error: "Collection not found" });
@@ -331,7 +498,7 @@ app.delete("/collections/:id", checkAccess, async (req, res) => {
 });
 
 // --- Files API ---
-app.post("/collections/:collectionId/upload", checkAccess, upload.single("file"), async (req, res) => {
+app.post("/collections/:collectionId/upload", ensureDbReady, checkAccess, checkWriteAccess, upload.single("file"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "No file provided" });
     const collectionId = req.params.collectionId;
@@ -365,7 +532,7 @@ app.post("/collections/:collectionId/upload", checkAccess, upload.single("file")
   }
 });
 
-app.get("/collections/:collectionId/files", checkAccess, async (req, res) => {
+app.get("/collections/:collectionId/files", ensureDbReady, checkAccess, async (req, res) => {
   try {
     const files = await File.find({ collectionId: req.params.collectionId, isDeleted: false }).sort({ uploadedAt: -1 }).lean();
     return res.json(files.map(toClientFile));
@@ -374,7 +541,7 @@ app.get("/collections/:collectionId/files", checkAccess, async (req, res) => {
   }
 });
 
-app.patch("/files/:fileId", checkAccess, async (req, res) => {
+app.patch("/files/:fileId", ensureDbReady, checkAccess, checkWriteAccess, async (req, res) => {
   try {
     const { displayName } = req.body;
     if (!displayName) return res.status(400).json({ error: "Display name required" });
@@ -392,7 +559,7 @@ app.patch("/files/:fileId", checkAccess, async (req, res) => {
   }
 });
 
-app.delete("/files/:fileId", checkAccess, async (req, res) => {
+app.delete("/files/:fileId", ensureDbReady, checkAccess, checkDeleteAccess, async (req, res) => {
   try {
     const file = await File.findOneAndUpdate(
       { _id: req.params.fileId, isDeleted: false },
@@ -417,7 +584,7 @@ app.delete("/files/:fileId", checkAccess, async (req, res) => {
 });
 
 // --- Notes API ---
-app.post("/collections/:collectionId/notes", checkAccess, async (req, res) => {
+app.post("/collections/:collectionId/notes", ensureDbReady, checkAccess, checkWriteAccess, async (req, res) => {
   try {
     const { text, id: localId } = req.body;
     if (!text) return res.status(400).json({ error: "Text required" });
@@ -445,7 +612,7 @@ app.post("/collections/:collectionId/notes", checkAccess, async (req, res) => {
   }
 });
 
-app.get("/collections/:collectionId/notes", checkAccess, async (req, res) => {
+app.get("/collections/:collectionId/notes", ensureDbReady, checkAccess, async (req, res) => {
   try {
     const notes = await Note.find({ collectionId: req.params.collectionId, isDeleted: false }).sort({ createdAt: 1 }).lean();
     return res.json(notes.map(toClientNote));
@@ -454,16 +621,30 @@ app.get("/collections/:collectionId/notes", checkAccess, async (req, res) => {
   }
 });
 
-app.patch("/notes/:noteId", checkAccess, async (req, res) => {
+app.patch("/notes/:noteId", ensureDbReady, checkAccess, checkWriteAccess, async (req, res) => {
   try {
     const { text } = req.body;
     if (!text) return res.status(400).json({ error: "Text required" });
+    const previous = await Note.findOne({ _id: req.params.noteId, isDeleted: false }).lean();
+    if (!previous) return res.status(404).json({ error: "Note not found" });
+
     const note = await Note.findOneAndUpdate(
       { _id: req.params.noteId, isDeleted: false },
       { text, editedAt: new Date() },
       { new: true }
     );
     if (!note) return res.status(404).json({ error: "Note not found" });
+
+    await AuditLog.create({
+      deviceId: req.device.deviceId,
+      action: 'edited_note',
+      resourceType: 'note',
+      resourceId: note._id,
+      details: {
+        before: (previous.text || "").substring(0, 30),
+        after: (text || "").substring(0, 30)
+      }
+    });
     
     const payload = toClientNote(note);
     io.emit("note:updated", payload);
@@ -473,7 +654,7 @@ app.patch("/notes/:noteId", checkAccess, async (req, res) => {
   }
 });
 
-app.delete("/notes/:noteId", checkAccess, async (req, res) => {
+app.delete("/notes/:noteId", ensureDbReady, checkAccess, checkWriteAccess, async (req, res) => {
   try {
     const note = await Note.findOneAndUpdate(
       { _id: req.params.noteId, isDeleted: false },

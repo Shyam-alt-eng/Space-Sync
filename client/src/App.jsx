@@ -50,6 +50,8 @@ const readableBytes = (bytes) => {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 };
 
+const getApiError = (err, fallback) => err?.response?.data?.error || fallback;
+
 function App() {
   // Application State
   const [collections, setCollections] = useState([]);
@@ -78,15 +80,20 @@ function App() {
   // Access Control State
   const [accessStatus, setAccessStatus] = useState('loading'); // 'loading' | 'new' | 'pending' | 'approved' | 'rejected'
   const [isAdmin, setIsAdmin] = useState(false);
+  const [permissions, setPermissions] = useState({ canRead: true, canWrite: true, canDelete: true });
   const [lockName, setLockName] = useState("");
   const [lockSecret, setLockSecret] = useState("");
   const [showAdminLogin, setShowAdminLogin] = useState(false);
+  const [accessMessage, setAccessMessage] = useState("");
+  const [isSubmittingAccess, setIsSubmittingAccess] = useState(false);
 
   // Admin Panel State
   const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
-  const [adminTab, setAdminTab] = useState('devices');
+  const [adminTab, setAdminTab] = useState('requests');
   const [adminDevices, setAdminDevices] = useState([]);
   const [adminAudits, setAdminAudits] = useState([]);
+  const [updatingPermissionFor, setUpdatingPermissionFor] = useState("");
+  const [removingDeviceId, setRemovingDeviceId] = useState("");
 
   const collectionInputRef = useRef(null);
   const imagesInputRef = useRef(null);
@@ -96,6 +103,8 @@ function App() {
   
   const selectedCollection = collections.find((c) => c._id === selectedCollectionId);
   const currentPending = pendingUploads.filter((p) => p.collectionId === selectedCollectionId);
+  const canWrite = isAdmin || permissions.canWrite;
+  const canDelete = isAdmin || permissions.canDelete;
 
   const timelineItems = useMemo(() => {
     const noteItems = notes.map((note) => ({
@@ -123,17 +132,29 @@ function App() {
   }, [notes, currentPending, files]);
 
   // Auth Checks
-  useEffect(() => {
-    const verifyAccess = async () => {
-      try {
-        const res = await api.post("/access/verify", { deviceId });
-        setAccessStatus(res.data.status);
-        setIsAdmin(res.data.isAdmin || false);
-      } catch (err) {
-        setAccessStatus('rejected');
+  const refreshAccessState = async (attempt = 0) => {
+    try {
+      const res = await api.post("/access/verify", { deviceId });
+      setAccessStatus(res.data.status);
+      setIsAdmin(res.data.isAdmin || false);
+      setPermissions(res.data.permissions || { canRead: true, canWrite: true, canDelete: true });
+      setAccessMessage("");
+    } catch (err) {
+      const statusCode = err?.response?.status;
+      if (statusCode === 503 && attempt < 3) {
+        setAccessMessage("Server is warming up. Retrying...");
+        setTimeout(() => refreshAccessState(attempt + 1), 1500);
+        return;
       }
-    };
-    verifyAccess();
+      setAccessStatus('new');
+      setIsAdmin(false);
+      setPermissions({ canRead: true, canWrite: true, canDelete: true });
+      setAccessMessage(getApiError(err, "Unable to verify access right now. You can still submit a request."));
+    }
+  };
+
+  useEffect(() => {
+    refreshAccessState();
   }, []);
 
   useEffect(() => {
@@ -141,11 +162,14 @@ function App() {
       if (isAdmin) setSyncMessage(`Access requested by ${data.name}`);
     });
     socket.on(`access:approved:${deviceId}`, () => {
-      setAccessStatus('approved');
       setSyncMessage("Access Approved!");
+      refreshAccessState();
     });
     socket.on("access:revoked", (data) => {
-      if (data.deviceId === deviceId) setAccessStatus('rejected');
+      if (data.deviceId === deviceId) {
+        setAccessStatus('rejected');
+        setAccessMessage("Your access was revoked by admin.");
+      }
     });
 
     return () => {
@@ -158,21 +182,30 @@ function App() {
   const requestAccess = async () => {
     if (!lockName.trim()) return;
     try {
+      setIsSubmittingAccess(true);
       const res = await api.post("/access/request", { deviceId, name: lockName });
       setAccessStatus(res.data.status);
-    } catch {
-      alert("Failed to request access");
+      setAccessMessage("Request submitted. Waiting for admin approval.");
+    } catch (err) {
+      setAccessMessage(getApiError(err, "Failed to request access"));
+    } finally {
+      setIsSubmittingAccess(false);
     }
   };
 
   const loginAdmin = async () => {
     try {
+      setIsSubmittingAccess(true);
       const res = await api.post("/access/admin", { deviceId, secret: lockSecret });
       setAccessStatus(res.data.status);
       setIsAdmin(res.data.isAdmin);
+      setPermissions(res.data.permissions || { canRead: true, canWrite: true, canDelete: true });
       setShowAdminLogin(false);
-    } catch {
-      alert("Invalid secret");
+      setAccessMessage("");
+    } catch (err) {
+      setAccessMessage(getApiError(err, "Invalid secret"));
+    } finally {
+      setIsSubmittingAccess(false);
     }
   };
 
@@ -283,6 +316,10 @@ function App() {
   // Actions
   const createCollection = async () => {
     if (!newCollectionName.trim()) return;
+    if (!canWrite) {
+      setSyncMessage("Write permission required");
+      return;
+    }
     try {
       const res = await api.post("/collections", { name: newCollectionName });
       setCollections((prev) => [res.data, ...prev]);
@@ -295,6 +332,10 @@ function App() {
   };
 
   const deleteCollection = async (collectionId) => {
+    if (!canDelete) {
+      setSyncMessage("Delete permission required");
+      return;
+    }
     try {
       await api.delete(`/collections/${collectionId}`);
     } catch { setSyncMessage("Failed to delete collection"); }
@@ -302,6 +343,10 @@ function App() {
 
   const renameCollection = async (collectionId) => {
     if (!renamingCollectionName.trim() || renamingCollectionId !== collectionId) return;
+    if (!canWrite) {
+      setSyncMessage("Write permission required");
+      return;
+    }
     try {
       const res = await api.patch(`/collections/${collectionId}`, { name: renamingCollectionName });
       setCollections((prev) => prev.map((c) => (c._id === collectionId ? res.data : c)));
@@ -311,6 +356,10 @@ function App() {
 
   const uploadFile = async (fileToUpload) => {
     if (!fileToUpload || !selectedCollectionId) return;
+    if (!canWrite) {
+      setSyncMessage("Write permission required");
+      return;
+    }
     if (!isOnline) {
       const queued = await addPendingUpload(fileToUpload, selectedCollectionId);
       setPendingUploads((prev) => [queued, ...prev]);
@@ -330,11 +379,19 @@ function App() {
   };
 
   const deleteFile = async (fileId) => {
+    if (!canDelete) {
+      setSyncMessage("Delete permission required");
+      return;
+    }
     try { await api.delete(`/files/${fileId}`); } catch { setSyncMessage("Failed to delete file"); }
   };
 
   const renameFile = async (fileId) => {
     if (!renamingFileName.trim() || renamingFileId !== fileId) return;
+    if (!canWrite) {
+      setSyncMessage("Write permission required");
+      return;
+    }
     try {
       await api.patch(`/files/${fileId}`, { displayName: renamingFileName.trim() });
       setRenamingFileId(null);
@@ -343,6 +400,10 @@ function App() {
 
   const sendMessage = async () => {
     if (!selectedCollectionId) return;
+    if (!canWrite) {
+      setSyncMessage("Write permission required");
+      return;
+    }
     const trimmed = composerText.trim();
     if (trimmed) {
       try {
@@ -361,6 +422,10 @@ function App() {
   };
 
   const saveEditedMessage = async (messageId) => {
+    if (!canWrite) {
+      setSyncMessage("Write permission required");
+      return;
+    }
     const trimmed = editingMessageText.trim();
     if (!trimmed) {
       try { await api.delete(`/notes/${messageId}`); } catch {}
@@ -374,6 +439,10 @@ function App() {
   };
 
   const deleteMessage = async (messageId) => {
+    if (!canWrite) {
+      setSyncMessage("Write permission required");
+      return;
+    }
     try { await api.delete(`/notes/${messageId}`); } catch { setSyncMessage("Failed to delete note"); }
   };
 
@@ -402,6 +471,12 @@ function App() {
     if (isAdminModalOpen) fetchAdminData();
   }, [isAdminModalOpen, adminTab]);
 
+  useEffect(() => {
+    if (!isAdmin && isAdminModalOpen) {
+      setIsAdminModalOpen(false);
+    }
+  }, [isAdmin, isAdminModalOpen]);
+
   const approveDevice = async (id) => {
     await api.post(`/admin/devices/${id}/approve`);
     fetchAdminData();
@@ -409,6 +484,17 @@ function App() {
   const revokeDevice = async (id) => {
     await api.post(`/admin/devices/${id}/revoke`);
     fetchAdminData();
+  };
+  const removeDevice = async (id) => {
+    try {
+      setRemovingDeviceId(id);
+      await api.delete(`/admin/devices/${id}`);
+      await fetchAdminData();
+    } catch (err) {
+      setSyncMessage(getApiError(err, "Failed to remove user"));
+    } finally {
+      setRemovingDeviceId("");
+    }
   };
   const undoLog = async (id) => {
     await api.post(`/admin/undo/${id}`);
@@ -419,8 +505,39 @@ function App() {
     fetchAdminData();
   };
 
+  const updateDevicePermission = async (device, key, value) => {
+    const current = {
+      canRead: device.permissions?.canRead !== false,
+      canWrite: device.permissions?.canWrite !== false,
+      canDelete: device.permissions?.canDelete !== false,
+    };
+    const next = { ...current, [key]: value };
+    if (key === "canWrite" && !value) next.canDelete = false;
+    if (key === "canDelete" && value) next.canWrite = true;
+
+    try {
+      setUpdatingPermissionFor(device.deviceId);
+      await api.patch(`/admin/devices/${device.deviceId}/permissions`, next);
+      await fetchAdminData();
+    } catch (err) {
+      setSyncMessage(getApiError(err, "Failed to update permissions"));
+    } finally {
+      setUpdatingPermissionFor("");
+    }
+  };
+
   // Render logic
-  if (accessStatus === 'loading') return null;
+  if (accessStatus === 'loading') {
+    return (
+      <div className="lock-screen-wrapper">
+        <div className="lock-card">
+          <h2>Starting SpaceSync</h2>
+          <p>Please wait while we verify access...</p>
+        </div>
+      </div>
+    );
+  }
+
   if (accessStatus !== 'approved') {
     return (
       <div className="lock-screen-wrapper">
@@ -430,24 +547,30 @@ function App() {
             <>
               <p>Enter Admin Secret</p>
               <input value={lockSecret} onChange={e=>setLockSecret(e.target.value)} type="password" placeholder="Admin Secret" className="lock-input" />
-              <button onClick={loginAdmin} className="lock-btn">Unlock</button>
+              <button onClick={loginAdmin} className="lock-btn" disabled={isSubmittingAccess || !lockSecret.trim()}>{isSubmittingAccess ? "Checking..." : "Unlock"}</button>
               <button onClick={()=>setShowAdminLogin(false)} className="lock-alt">Back to Request</button>
             </>
           ) : accessStatus === 'rejected' ? (
             <>
-              <p>Your access request was denied or revoked.</p>
+              <p>Your access is currently blocked. You can submit a new request for review.</p>
+              <input value={lockName} onChange={e=>setLockName(e.target.value)} placeholder="e.g. John's iPad" className="lock-input" />
+              <button onClick={requestAccess} className="lock-btn" disabled={isSubmittingAccess || !lockName.trim()}>{isSubmittingAccess ? "Submitting..." : "Request Access Again"}</button>
               <button onClick={()=>setShowAdminLogin(true)} className="lock-alt" style={{marginTop: "1rem"}}>I am the Admin</button>
             </>
           ) : accessStatus === 'pending' ? (
-            <p>Your request is pending admin approval.</p>
+            <>
+              <p>Your request is pending admin approval.</p>
+              <button onClick={() => refreshAccessState()} className="lock-alt">Refresh status</button>
+            </>
           ) : (
             <>
               <p>Enter a device name to request access.</p>
               <input value={lockName} onChange={e=>setLockName(e.target.value)} placeholder="e.g. John's iPad" className="lock-input" />
-              <button onClick={requestAccess} className="lock-btn">Request Access</button>
+              <button onClick={requestAccess} className="lock-btn" disabled={isSubmittingAccess || !lockName.trim()}>{isSubmittingAccess ? "Submitting..." : "Request Access"}</button>
               <button onClick={()=>setShowAdminLogin(true)} className="lock-alt">I am the Admin</button>
             </>
           )}
+          {accessMessage && <p className="lock-feedback">{accessMessage}</p>}
         </div>
       </div>
     );
@@ -471,18 +594,18 @@ function App() {
                     ) : (
                       <span onDoubleClick={(e) => { e.stopPropagation(); setRenamingCollectionId(col._id); setRenamingCollectionName(col.name); }}>{col.name}</span>
                     )}
-                    <button className="menu-delete" onClick={(e) => { e.stopPropagation(); deleteCollection(col._id); }} title="Delete">✕</button>
+                      {canDelete && <button className="menu-delete" onClick={(e) => { e.stopPropagation(); deleteCollection(col._id); }} title="Delete">✕</button>}
                   </div>
                 ))}
               </div>
-              {isCreateCollectionOpen ? (
+              {canWrite && isCreateCollectionOpen ? (
                 <div className="create-collection-inline">
                   <input ref={collectionInputRef} type="text" placeholder="Name" value={newCollectionName} onChange={(e) => setNewCollectionName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") createCollection(); if (e.key === "Escape") { setIsCreateCollectionOpen(false); setNewCollectionName(""); } }} />
                   <button onClick={createCollection} disabled={!newCollectionName.trim()}>Create</button>
                 </div>
-              ) : (
+              ) : canWrite ? (
                 <button className="menu-create" onClick={() => setIsCreateCollectionOpen(true)}>+ Create New</button>
-              )}
+              ) : null}
             </div>
           )}
         </div>
@@ -521,19 +644,19 @@ function App() {
                       </time>
                       <div className="note-actions">
                          <button className="icon-btn copy-btn" onClick={() => copyText(item.payload.text)} title="Copy Text">📋</button>
-                        {item.payload.createdBy === deviceId && (
+                        {
                           editingMessageId === item.payload.id ? (
                             <>
-                              <button className="icon-btn" onClick={() => saveEditedMessage(item.payload.id)}>✓</button>
+                              {canWrite && <button className="icon-btn" onClick={() => saveEditedMessage(item.payload.id)}>✓</button>}
                               <button className="icon-btn" onClick={cancelEditingMessage}>✕</button>
                             </>
                           ) : (
                             <>
-                              <button className="icon-btn" onClick={() => startEditingMessage(item.payload)}>✎</button>
-                              <button className="icon-btn danger" onClick={() => deleteMessage(item.payload.id)}>🗑</button>
+                              {canWrite && <button className="icon-btn" onClick={() => startEditingMessage(item.payload)}>✎</button>}
+                              {canWrite && <button className="icon-btn danger" onClick={() => deleteMessage(item.payload.id)}>🗑</button>}
                             </>
                           )
-                        )}
+                        }
                       </div>
                     </article>
                   </div>
@@ -564,17 +687,17 @@ function App() {
                       <time>{new Date(file.uploadedAt).toLocaleString([], {dateStyle:'short', timeStyle:'short'})}</time>
                       <span>{readableBytes(file.size)}</span>
                     </div>
-                    {file.uploadedBy === deviceId && (
+                    {file.uploadedBy === deviceId && (canWrite || canDelete) && (
                       <div className="file-actions">
                         {renamingFileId === file._id ? (
                           <>
-                            <button className="icon-btn" onClick={() => renameFile(file._id)}>✓</button>
+                            {canWrite && <button className="icon-btn" onClick={() => renameFile(file._id)}>✓</button>}
                             <button className="icon-btn" onClick={() => setRenamingFileId(null)}>✕</button>
                           </>
                         ) : (
-                          <button className="icon-btn" onClick={() => { setRenamingFileId(file._id); setRenamingFileName(file.displayName); }}>✎</button>
+                          canWrite ? <button className="icon-btn" onClick={() => { setRenamingFileId(file._id); setRenamingFileName(file.displayName); }}>✎</button> : null
                         )}
-                        <button className="icon-btn danger" onClick={() => deleteFile(file._id)}>🗑</button>
+                        {canDelete && <button className="icon-btn danger" onClick={() => deleteFile(file._id)}>🗑</button>}
                       </div>
                     )}
                   </article>
@@ -607,8 +730,8 @@ function App() {
             }}
             disabled={!selectedCollectionId}
           />
-          <button className="send-btn" onClick={sendMessage} disabled={(!composerText.trim() && !selectedFile) || isUploading || !selectedCollectionId}>➤</button>
-          <button className="attach-btn" onClick={() => setIsAttachmentOpen(p => !p)} disabled={!selectedCollectionId}>+</button>
+          <button className="send-btn" onClick={sendMessage} disabled={(!composerText.trim() && !selectedFile) || isUploading || !selectedCollectionId || !canWrite}>➤</button>
+          <button className="attach-btn" onClick={() => setIsAttachmentOpen(p => !p)} disabled={!selectedCollectionId || !canWrite}>+</button>
           
           <div className={`attachment-surface ${isAttachmentOpen ? "open" : ""}`}>
              <div className="attachment-header">
@@ -629,7 +752,7 @@ function App() {
       </footer>
       
       {/* Admin Panel Modal */}
-      {isAdminModalOpen && (
+      {isAdmin && isAdminModalOpen && (
         <div className="admin-modal-wrapper">
            <div className="admin-modal">
               <div className="admin-header">
@@ -638,10 +761,12 @@ function App() {
               </div>
               <div className="admin-tabs">
                  <button className={`admin-tab ${adminTab === 'devices' ? 'active' : ''}`} onClick={()=>setAdminTab('devices')}>Devices</button>
+                  <button className={`admin-tab ${adminTab === 'requests' ? 'active' : ''}`} onClick={()=>setAdminTab('requests')}>Requests</button>
+                  <button className={`admin-tab ${adminTab === 'permissions' ? 'active' : ''}`} onClick={()=>setAdminTab('permissions')}>Manage Access</button>
                  <button className={`admin-tab ${adminTab === 'audit' ? 'active' : ''}`} onClick={()=>setAdminTab('audit')}>Audit Log</button>
               </div>
               <div className="admin-content">
-                 {adminTab === 'devices' && adminDevices.map(d => (
+                  {adminTab === 'devices' && adminDevices.map(d => (
                     <div className="device-row" key={d.deviceId}>
                        <div className="device-info">
                           <h4>{d.name} {d.isAdmin ? '👑' : ''} {d.deviceId === deviceId ? '(You)' : ''}</h4>
@@ -655,6 +780,54 @@ function App() {
                        )}
                     </div>
                  ))}
+
+                  {adminTab === 'requests' && adminDevices.filter((d) => !d.isAdmin && d.status === 'pending').map(d => (
+                    <div className="device-row" key={d.deviceId}>
+                      <div className="device-info">
+                        <h4>{d.name}</h4>
+                        <span>ID: {d.deviceId.substring(0,8)}... | Requested: {new Date(d.updatedAt || d.createdAt).toLocaleString()}</span>
+                      </div>
+                      <div className="audit-actions">
+                        <button className="btn-small approve" onClick={()=>approveDevice(d.deviceId)}>Approve</button>
+                        <button className="btn-small revoke" onClick={()=>revokeDevice(d.deviceId)}>Reject</button>
+                      </div>
+                    </div>
+                  ))}
+                  {adminTab === 'requests' && adminDevices.filter((d) => !d.isAdmin && d.status === 'pending').length === 0 && <p style={{textAlign:'center', color:'#6a5a4e'}}>No pending requests.</p>}
+
+                   {adminTab === 'permissions' && adminDevices.filter((d) => !d.isAdmin).map(d => {
+                    const p = {
+                     canRead: d.permissions?.canRead !== false,
+                     canWrite: d.permissions?.canWrite !== false,
+                     canDelete: d.permissions?.canDelete !== false,
+                    };
+                      const disabled = updatingPermissionFor === d.deviceId || removingDeviceId === d.deviceId || d.status !== 'approved';
+                    return (
+                     <div className="device-row permissions-row" key={d.deviceId}>
+                      <div className="device-info">
+                        <h4>{d.name}</h4>
+                            <span>ID: {d.deviceId.substring(0,8)}... | Status: <strong className={`device-status ${d.status}`}>{d.status}</strong></span>
+                      </div>
+                      <div className="permission-controls">
+                        <label>
+                         <input type="checkbox" checked={p.canRead} disabled={disabled} onChange={(e) => updateDevicePermission(d, "canRead", e.target.checked)} />
+                         Read
+                        </label>
+                        <label>
+                         <input type="checkbox" checked={p.canWrite} disabled={disabled} onChange={(e) => updateDevicePermission(d, "canWrite", e.target.checked)} />
+                         Write
+                        </label>
+                        <label>
+                         <input type="checkbox" checked={p.canDelete} disabled={disabled} onChange={(e) => updateDevicePermission(d, "canDelete", e.target.checked)} />
+                         Delete
+                        </label>
+                          <button className="btn-small revoke" onClick={() => revokeDevice(d.deviceId)} disabled={removingDeviceId === d.deviceId || d.status === 'rejected'}>Revoke</button>
+                          <button className="btn-small remove" onClick={() => removeDevice(d.deviceId)} disabled={removingDeviceId === d.deviceId}>{removingDeviceId === d.deviceId ? 'Removing...' : 'Remove User'}</button>
+                      </div>
+                     </div>
+                    );
+                  })}
+                 {adminTab === 'permissions' && adminDevices.filter((d) => !d.isAdmin).length === 0 && <p style={{textAlign:'center', color:'#6a5a4e'}}>No users available for permission management.</p>}
                  
                  {adminTab === 'audit' && adminAudits.map(a => (
                     <div className="audit-row" key={a._id}>
@@ -664,8 +837,8 @@ function App() {
                        </div>
                        {(a.action.startsWith('deleted_')) && (
                           <div className="audit-actions">
-                             <button className="btn-small undo" onClick={()=>undoLog(a._id)}>Restore</button>
-                             <button className="btn-small delete" onClick={()=>permanentDeleteLog(a._id)}>Erase</button>
+                            <button className="btn-small undo" onClick={()=>undoLog(a._id)}>Retain</button>
+                            <button className="btn-small delete" onClick={()=>permanentDeleteLog(a._id)}>Permanently Delete</button>
                           </div>
                        )}
                     </div>

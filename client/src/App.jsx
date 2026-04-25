@@ -804,6 +804,9 @@ function App() {
     return (
       <div className="lock-screen-wrapper">
         <div className="lock-card">
+          <div className="lock-brand">
+            <img src="/favicon.svg" alt="SpaceSync logo" className="app-logo" />
+          </div>
           <h2>Starting SpaceSync</h2>
           <p>Please wait while we verify access...</p>
         </div>
@@ -815,6 +818,9 @@ function App() {
     return (
       <div className="lock-screen-wrapper">
         <div className="lock-card">
+          <div className="lock-brand">
+            <img src="/favicon.svg" alt="SpaceSync logo" className="app-logo" />
+          </div>
           <h2>SpaceSync Locked</h2>
           {showAdminLogin ? (
             <>
@@ -852,6 +858,10 @@ function App() {
   return (
     <div className={`app-shell ${isSidebarNavMode ? "sidebar-nav-mode" : ""}`}>
       <header className="top-bar">
+        <div className="app-brand" title="SpaceSync">
+          <img src="/favicon.svg" alt="SpaceSync logo" className="app-logo" />
+          <span>SpaceSync</span>
+        </div>
         {isSidebarNavMode && (
           <button className="sidebar-toggle" onClick={() => setIsSidebarOpen((p) => !p)} aria-label="Open sidebar menu">
             ☰
@@ -872,7 +882,10 @@ function App() {
           {isSidebarOpen && <button className="sidebar-backdrop" onClick={() => setIsSidebarOpen(false)} aria-label="Close sidebar" />}
           <aside className={`mobile-sidebar ${isSidebarOpen ? "open" : ""}`}>
             <div className="mobile-sidebar-header">
-              <h4>SpaceSync</h4>
+              <div className="mobile-sidebar-brand">
+                <img src="/favicon.svg" alt="SpaceSync logo" className="app-logo" />
+                <h4>SpaceSync</h4>
+              </div>
               <button className="sidebar-close" onClick={() => setIsSidebarOpen(false)} aria-label="Close sidebar">✕</button>
             </div>
             {renderCollectionDropdown(true)}

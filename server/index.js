@@ -561,6 +561,22 @@ app.patch("/files/:fileId", ensureDbReady, checkAccess, checkWriteAccess, async 
   }
 });
 
+app.get("/files/:fileId/download", ensureDbReady, checkAccess, async (req, res) => {
+  try {
+    const file = await File.findOne({ _id: req.params.fileId, isDeleted: false }).lean();
+    if (!file) return res.status(404).json({ error: "File not found" });
+
+    const filePath = path.join(uploadsDir, file.storedName);
+    if (!fs.existsSync(filePath)) return res.status(404).json({ error: "Stored file missing" });
+
+    const requestedName = (file.displayName || file.originalName || "download").trim();
+    const safeDownloadName = path.basename(requestedName);
+    return res.download(filePath, safeDownloadName);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 app.delete("/files/:fileId", ensureDbReady, checkAccess, checkDeleteAccess, async (req, res) => {
   try {
     const file = await File.findOneAndUpdate(

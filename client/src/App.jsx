@@ -62,6 +62,7 @@ function App() {
   const [isUploading, setIsUploading] = useState(false);
   const [isSyncingPending, setIsSyncingPending] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(null);
+  const [downloadingFileId, setDownloadingFileId] = useState("");
   const [syncMessage, setSyncMessage] = useState("Ready");
   
   // UI State
@@ -595,6 +596,28 @@ function App() {
     try { await api.delete(`/files/${fileId}`); } catch { setSyncMessage("Failed to delete file"); }
   };
 
+  const downloadFileToDevice = async (file) => {
+    if (!file?._id) return;
+    try {
+      setDownloadingFileId(file._id);
+      const res = await api.get(`/files/${file._id}/download`, { responseType: "blob" });
+      const blob = new Blob([res.data], { type: res.headers["content-type"] || file.mimeType || "application/octet-stream" });
+      const objectUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = file.displayName || file.originalName || "download";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(objectUrl);
+      setSyncMessage("Download started");
+    } catch (err) {
+      setSyncMessage(getApiError(err, "Failed to download file"));
+    } finally {
+      setDownloadingFileId("");
+    }
+  };
+
   const renameFile = async (fileId) => {
     if (!renamingFileName.trim() || renamingFileId !== fileId) return;
     if (!canWrite) {
@@ -946,14 +969,14 @@ function App() {
                       <span>{readableBytes(file.size)}</span>
                     </div>
                     <div className="file-actions">
-                      <a
+                      <button
                         className="icon-btn"
-                        href={`${BASE_URL}${file.downloadUrl}`}
-                        download={file.displayName || file.originalName}
+                        onClick={() => downloadFileToDevice(file)}
+                        disabled={downloadingFileId === file._id}
                         title="Download"
                       >
-                        ⬇
-                      </a>
+                        {downloadingFileId === file._id ? "..." : "⬇"}
+                      </button>
                     </div>
                     {file.uploadedBy === deviceId && (canWrite || canDelete) && (
                       <div className="file-actions">

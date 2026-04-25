@@ -354,9 +354,11 @@ app.post("/admin/devices/:deviceId/approve", ensureDbReady, checkAdmin, async (r
 });
 
 app.post("/admin/devices/:deviceId/revoke", ensureDbReady, checkAdmin, async (req, res) => {
-  const device = await Device.findOneAndUpdate({ deviceId: req.params.deviceId }, { status: 'rejected' }, { new: true });
+  const device = await Device.findOne({ deviceId: req.params.deviceId });
   if (!device) return res.status(404).json({ error: "Device not found" });
   if (device.isAdmin) return res.status(400).json({ error: "Cannot revoke an admin device" });
+  device.status = 'rejected';
+  await device.save();
   io.emit("access:revoked", { deviceId: device.deviceId });
   res.json(device);
 });

@@ -102,6 +102,7 @@ The server emits events over Socket.IO whenever something changes:
 - collection deleted
 
 The client listens for those events and updates the visible timeline without requiring a manual refresh.
+In addition to realtime events, the client performs a silent background refresh every 5 seconds to keep data current without causing visible UI disruption.
 
 ### 8. Offline mode keeps the app usable
 
@@ -292,7 +293,6 @@ Environment variables:
 NODE_ENV=production
 MONGO_URI=<your mongodb uri>
 CLIENT_ORIGIN=<your deployed app origin>
-ADMIN_SECRET=<your strong admin secret>
 ```
 
 ### Split deployment
@@ -315,6 +315,7 @@ CLIENT_ORIGIN=https://your-frontend-domain.com
 - Cached collections and files allow the UI to reopen in a useful state when the network is unavailable.
 - Pending uploads are stored locally until a reconnect flow is used to send them to the server.
 - Socket.IO keeps the UI synchronized when multiple approved devices are active at the same time.
+- A silent 5-second background refresh loop keeps collections and timeline data fresh without flashing or interrupting the interface.
 
 ## Security and operations notes
 

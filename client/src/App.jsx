@@ -6,7 +6,6 @@ import {
   cacheCollections,
   getCachedCollections,
   addCachedCollection,
-  removeCachedCollection,
   cacheFilesForCollection,
   getCachedFilesForCollection,
   upsertCachedFile,
@@ -17,7 +16,7 @@ import {
 import "./App.css";
 const DEFAULT_API_URL = import.meta.env.DEV
   ? `${window.location.protocol}//${window.location.hostname}:5000`
-  : "https://your-render-backend.onrender.com";
+  : "";
 const BASE_URL = import.meta.env.VITE_API_URL || DEFAULT_API_URL;
 
 // Device ID Logic
@@ -37,7 +36,7 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
-const socket = io(BASE_URL, {
+const socket = io(BASE_URL || undefined, {
   transports: ["websocket", "polling"],
 });
 
@@ -61,6 +60,8 @@ function App() {
   const [pendingUploads, setPendingUploads] = useState([]);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [isUploading, setIsUploading] = useState(false);
+  const [isSyncingPending, setIsSyncingPending] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(null);
   const [syncMessage, setSyncMessage] = useState("Ready");
   
   // UI State
@@ -99,12 +100,61 @@ function App() {
   const imagesInputRef = useRef(null);
   const docsInputRef = useRef(null);
   const videosInputRef = useRef(null);
-  const captureInputRef = useRef(null);
   
   const selectedCollection = collections.find((c) => c._id === selectedCollectionId);
   const currentPending = pendingUploads.filter((p) => p.collectionId === selectedCollectionId);
   const canWrite = isAdmin || permissions.canWrite;
   const canDelete = isAdmin || permissions.canDelete;
+
+  const adminUserTracking = useMemo(() => {
+    const byDevice = new Map();
+
+    for (const device of adminDevices) {
+      byDevice.set(device.deviceId, {
+        deviceId: device.deviceId,
+        name: device.name,
+        status: device.status,
+        totalEvents: 0,
+        uploads: 0,
+        createdNotes: 0,
+        editedNotes: 0,
+        deletedItems: 0,
+        lastActivityAt: null,
+      });
+    }
+
+    for (const audit of adminAudits) {
+      const existing = byDevice.get(audit.deviceId) || {
+        deviceId: audit.deviceId,
+        name: audit.deviceName || "Unknown",
+        status: "unknown",
+        totalEvents: 0,
+        uploads: 0,
+        createdNotes: 0,
+        editedNotes: 0,
+        deletedItems: 0,
+        lastActivityAt: null,
+      };
+
+      existing.totalEvents += 1;
+      if (audit.action === "uploaded_file") existing.uploads += 1;
+      if (audit.action === "created_note") existing.createdNotes += 1;
+      if (audit.action === "edited_note") existing.editedNotes += 1;
+      if (audit.action?.startsWith("deleted_")) existing.deletedItems += 1;
+
+      if (!existing.lastActivityAt || new Date(audit.createdAt).getTime() > new Date(existing.lastActivityAt).getTime()) {
+        existing.lastActivityAt = audit.createdAt;
+      }
+
+      byDevice.set(audit.deviceId, existing);
+    }
+
+    return Array.from(byDevice.values()).sort((a, b) => {
+      const aTs = a.lastActivityAt ? new Date(a.lastActivityAt).getTime() : 0;
+      const bTs = b.lastActivityAt ? new Date(b.lastActivityAt).getTime() : 0;
+      return bTs - aTs;
+    });
+  }, [adminDevices, adminAudits]);
 
   const timelineItems = useMemo(() => {
     const noteItems = notes.map((note) => ({
@@ -117,7 +167,7 @@ function App() {
     const pendingItems = currentPending.map((pending) => ({
       kind: "pending",
       id: pending.id,
-      ts: new Date(pending.createdAt || Date.now()).getTime(),
+      ts: new Date(pending.addedAt || Date.now()).getTime(),
       payload: pending,
     }));
 
@@ -155,6 +205,42 @@ function App() {
 
   useEffect(() => {
     refreshAccessState();
+  }, []);
+
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOnline(true);
+      setSyncMessage("Back online. Syncing latest updates...");
+    };
+    const handleOffline = () => {
+      setIsOnline(false);
+      setSyncMessage("You are offline. Work is cached locally.");
+    };
+
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, []);
+
+  useEffect(() => {
+    const onConnect = () => {
+      setSyncMessage("Realtime connected");
+    };
+    const onDisconnect = () => {
+      setSyncMessage("Realtime disconnected. Retrying...");
+    };
+
+    socket.on("connect", onConnect);
+    socket.on("disconnect", onDisconnect);
+
+    return () => {
+      socket.off("connect", onConnect);
+      socket.off("disconnect", onDisconnect);
+    };
   }, []);
 
   useEffect(() => {
@@ -240,7 +326,8 @@ function App() {
     }
   };
 
-  const fetchCollectionData = async (collectionId) => {
+  const fetchCollectionData = async (collectionId, options = {}) => {
+    const { silent = false } = options;
     if (!collectionId) return;
     try {
       const [filesRes, notesRes] = await Promise.all([
@@ -250,12 +337,27 @@ function App() {
       setFiles(filesRes.data);
       setNotes(notesRes.data);
       await cacheFilesForCollection(collectionId, filesRes.data);
-      setSyncMessage(`Synced ${filesRes.data.length} files, ${notesRes.data.length} notes`);
+      if (!silent) {
+        setSyncMessage(`Synced ${filesRes.data.length} files, ${notesRes.data.length} notes`);
+      }
     } catch {
       const cachedFiles = await getCachedFilesForCollection(collectionId);
       setFiles(cachedFiles);
       setNotes([]);
-      setSyncMessage("Showing cached files");
+      if (!silent) {
+        setSyncMessage("Showing cached files");
+      }
+    }
+  };
+
+  const refreshWorkspaceData = async () => {
+    if (accessStatus !== "approved") return;
+    await fetchCollections();
+    if (selectedCollectionId) {
+      await fetchCollectionData(selectedCollectionId, { silent: true });
+    }
+    if (isAdmin && isAdminModalOpen) {
+      await fetchAdminData();
     }
   };
 
@@ -270,6 +372,25 @@ function App() {
       fetchCollectionData(selectedCollectionId);
     }
   }, [selectedCollectionId, accessStatus]);
+
+  useEffect(() => {
+    if (accessStatus !== "approved") return;
+    const interval = setInterval(() => {
+      refreshWorkspaceData();
+    }, 5000);
+
+    const onVisible = () => {
+      if (document.visibilityState === "visible") {
+        refreshWorkspaceData();
+      }
+    };
+
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [accessStatus, selectedCollectionId, isAdminModalOpen, isAdmin]);
 
   useEffect(() => {
     if (accessStatus !== 'approved') return;
@@ -364,19 +485,89 @@ function App() {
       const queued = await addPendingUpload(fileToUpload, selectedCollectionId);
       setPendingUploads((prev) => [queued, ...prev]);
       setSelectedFile(null);
+      setSyncMessage("No internet. File queued and will auto-upload on reconnect.");
       return;
     }
     setIsUploading(true);
     try {
       const formData = new FormData();
       formData.append("file", fileToUpload);
-      await api.post(`/collections/${selectedCollectionId}/upload`, formData);
+      await api.post(`/collections/${selectedCollectionId}/upload`, formData, {
+        onUploadProgress: (event) => {
+          const total = event.total || fileToUpload.size || 0;
+          const loaded = event.loaded || 0;
+          const percent = total > 0 ? Math.min(100, Math.round((loaded / total) * 100)) : 0;
+          setUploadProgress({
+            kind: "direct",
+            name: fileToUpload.name,
+            loaded,
+            total,
+            percent,
+          });
+        },
+      });
       setSelectedFile(null);
+      setSyncMessage("Upload completed");
     } catch (e) {
       console.log(e);
       setSyncMessage("Upload failed");
-    } finally { setIsUploading(false); }
+    } finally {
+      setIsUploading(false);
+      setUploadProgress(null);
+    }
   };
+
+  const syncPendingUploads = async () => {
+    if (!isOnline || accessStatus !== "approved" || !canWrite || pendingUploads.length === 0 || isSyncingPending) {
+      return;
+    }
+
+    setIsSyncingPending(true);
+    let uploadedCount = 0;
+
+    const sortedPending = [...pendingUploads].sort((a, b) => {
+      return new Date(a.addedAt || 0).getTime() - new Date(b.addedAt || 0).getTime();
+    });
+
+    for (const entry of sortedPending) {
+      try {
+        const formData = new FormData();
+        formData.append("file", entry.blob, entry.name);
+        await api.post(`/collections/${entry.collectionId}/upload`, formData, {
+          onUploadProgress: (event) => {
+            const total = event.total || entry.size || 0;
+            const loaded = event.loaded || 0;
+            const percent = total > 0 ? Math.min(100, Math.round((loaded / total) * 100)) : 0;
+            setUploadProgress({
+              kind: "pending",
+              id: entry.id,
+              name: entry.name,
+              loaded,
+              total,
+              percent,
+            });
+          },
+        });
+
+        await removePendingUpload(entry.id);
+        setPendingUploads((prev) => prev.filter((p) => p.id !== entry.id));
+        uploadedCount += 1;
+      } catch {
+        setSyncMessage("Some queued uploads are still pending. Will retry automatically.");
+        break;
+      }
+    }
+
+    if (uploadedCount > 0) {
+      setSyncMessage(`Synced ${uploadedCount} queued upload${uploadedCount > 1 ? "s" : ""}`);
+    }
+    setUploadProgress(null);
+    setIsSyncingPending(false);
+  };
+
+  useEffect(() => {
+    syncPendingUploads();
+  }, [isOnline, pendingUploads.length, accessStatus, canWrite]);
 
   const deleteFile = async (fileId) => {
     if (!canDelete) {
@@ -452,6 +643,14 @@ function App() {
   const copyText = (text) => {
     navigator.clipboard.writeText(text);
     setSyncMessage("Copied to clipboard!");
+  };
+
+  const logoutDevice = () => {
+    const shouldLogout = window.confirm("Log out from this device? You can request access again anytime.");
+    if (!shouldLogout) return;
+    localStorage.removeItem("spacesync-device-id");
+    socket.disconnect();
+    window.location.reload();
   };
 
   // Admin Actions
@@ -611,7 +810,9 @@ function App() {
         </div>
 
         <div className="top-status">
+          <button className="admin-btn" onClick={refreshWorkspaceData}>Refresh</button>
           {isAdmin && <button className="admin-btn" onClick={() => setIsAdminModalOpen(true)}>Manage Access</button>}
+          <button className="admin-btn" onClick={logoutDevice}>Logout</button>
           <span className={`status-dot ${isOnline ? "online" : "offline"}`} />
           <span>{isOnline ? "Online" : "Offline"}</span>
         </div>
@@ -663,12 +864,26 @@ function App() {
                 );
               }
               if (item.kind === "pending") {
+                const pendingProgress = uploadProgress?.kind === "pending" && uploadProgress?.id === item.payload.id
+                  ? uploadProgress
+                  : null;
                 return (
                  <div key={item.id} className="message-row me">
                     <article className="bubble bubble-pending">
                       <div className="bubble-title">Pending upload</div>
                       <p>{item.payload.name}</p>
                       <time>{readableBytes(item.payload.size)}</time>
+                      {pendingProgress && (
+                        <div className="upload-progress">
+                          <div className="upload-progress-label">
+                            <span>{pendingProgress.percent}%</span>
+                            <span>{readableBytes(pendingProgress.loaded)} / {readableBytes(pendingProgress.total || item.payload.size)}</span>
+                          </div>
+                          <div className="upload-progress-track">
+                            <span style={{ width: `${pendingProgress.percent}%` }} />
+                          </div>
+                        </div>
+                      )}
                     </article>
                   </div>
                 );
@@ -686,6 +901,16 @@ function App() {
                     <div className="file-line">
                       <time>{new Date(file.uploadedAt).toLocaleString([], {dateStyle:'short', timeStyle:'short'})}</time>
                       <span>{readableBytes(file.size)}</span>
+                    </div>
+                    <div className="file-actions">
+                      <a
+                        className="icon-btn"
+                        href={`${BASE_URL}${file.downloadUrl}`}
+                        download={file.displayName || file.originalName}
+                        title="Download"
+                      >
+                        ⬇
+                      </a>
                     </div>
                     {file.uploadedBy === deviceId && (canWrite || canDelete) && (
                       <div className="file-actions">
@@ -714,6 +939,17 @@ function App() {
         {selectedFile && (
           <div className="attachment-preview">
             <span>{selectedFile.name}</span>
+            {uploadProgress?.kind === "direct" && (
+              <div className="upload-progress">
+                <div className="upload-progress-label">
+                  <span>{uploadProgress.percent}%</span>
+                  <span>{readableBytes(uploadProgress.loaded)} / {readableBytes(uploadProgress.total || selectedFile.size)}</span>
+                </div>
+                <div className="upload-progress-track">
+                  <span style={{ width: `${uploadProgress.percent}%` }} />
+                </div>
+              </div>
+            )}
             <button onClick={() => setSelectedFile(null)}>✕</button>
           </div>
         )}
@@ -763,6 +999,7 @@ function App() {
                  <button className={`admin-tab ${adminTab === 'devices' ? 'active' : ''}`} onClick={()=>setAdminTab('devices')}>Devices</button>
                   <button className={`admin-tab ${adminTab === 'requests' ? 'active' : ''}`} onClick={()=>setAdminTab('requests')}>Requests</button>
                   <button className={`admin-tab ${adminTab === 'permissions' ? 'active' : ''}`} onClick={()=>setAdminTab('permissions')}>Manage Access</button>
+                  <button className={`admin-tab ${adminTab === 'tracking' ? 'active' : ''}`} onClick={()=>setAdminTab('tracking')}>User Tracking</button>
                  <button className={`admin-tab ${adminTab === 'audit' ? 'active' : ''}`} onClick={()=>setAdminTab('audit')}>Audit Log</button>
               </div>
               <div className="admin-content">
@@ -828,6 +1065,25 @@ function App() {
                     );
                   })}
                  {adminTab === 'permissions' && adminDevices.filter((d) => !d.isAdmin).length === 0 && <p style={{textAlign:'center', color:'#6a5a4e'}}>No users available for permission management.</p>}
+
+                 {adminTab === 'tracking' && adminUserTracking.map((u) => (
+                    <div className="audit-row tracking-row" key={u.deviceId}>
+                      <div className="audit-info">
+                        <h4>{u.name} <span style={{color:'#db9f75'}}>{u.status}</span></h4>
+                        <span>
+                          Last activity: {u.lastActivityAt ? new Date(u.lastActivityAt).toLocaleString() : "No activity"}
+                        </span>
+                      </div>
+                      <div className="tracking-stats">
+                        <span>Events: {u.totalEvents}</span>
+                        <span>Uploads: {u.uploads}</span>
+                        <span>Notes+: {u.createdNotes}</span>
+                        <span>Edits: {u.editedNotes}</span>
+                        <span>Deletes: {u.deletedItems}</span>
+                      </div>
+                    </div>
+                 ))}
+                 {adminTab === 'tracking' && adminUserTracking.length === 0 && <p style={{textAlign:'center', color:'#6a5a4e'}}>No user activity yet.</p>}
                  
                  {adminTab === 'audit' && adminAudits.map(a => (
                     <div className="audit-row" key={a._id}>

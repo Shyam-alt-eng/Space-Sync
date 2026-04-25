@@ -815,7 +815,7 @@ function App() {
           ) : (
             <>
               <p>Enter a device name to request access.</p>
-              <input value={lockName} onChange={e=>setLockName(e.target.value)} placeholder="e.g. John's iPad" className="lock-input" />
+              <input value={lockName} onChange={e=>setLockName(e.target.value)} placeholder="e.g. Sham's Laptop" className="lock-input" />
               <button onClick={requestAccess} className="lock-btn" disabled={isSubmittingAccess || !lockName.trim()}>{isSubmittingAccess ? "Submitting..." : "Request Access"}</button>
               <button onClick={()=>setShowAdminLogin(true)} className="lock-alt">I am the Admin</button>
             </>

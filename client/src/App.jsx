@@ -803,7 +803,7 @@ function App() {
           ) : accessStatus === 'rejected' ? (
             <>
               <p>Your access is currently blocked. You can submit a new request for review.</p>
-              <input value={lockName} onChange={e=>setLockName(e.target.value)} placeholder="e.g. John's iPad" className="lock-input" />
+              <input value={lockName} onChange={e=>setLockName(e.target.value)} placeholder="e.g. Sham's Laptop" className="lock-input" />
               <button onClick={requestAccess} className="lock-btn" disabled={isSubmittingAccess || !lockName.trim()}>{isSubmittingAccess ? "Submitting..." : "Request Access Again"}</button>
               <button onClick={()=>setShowAdminLogin(true)} className="lock-alt" style={{marginTop: "1rem"}}>I am the Admin</button>
             </>

@@ -169,6 +169,12 @@
   font-weight: 600;
 }
 
+.sidebar-toggle,
+.sidebar-backdrop,
+.mobile-sidebar {
+  display: none;
+}
+
 .status-dot {
   width: 10px;
   height: 10px;
@@ -585,59 +591,112 @@
     border-radius: 0;
   }
 
-  .app-shell.sidebar-nav-mode .collection-dropdown {
+  .top-bar {
+    justify-content: space-between;
+  }
+
+  .sidebar-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+    border: 1px solid rgba(219, 159, 117, 0.45);
+    background: rgba(18, 35, 42, 0.78);
+    color: #f2e4d7;
+    font-size: 22px;
+    cursor: pointer;
+  }
+
+  .app-shell.sidebar-nav-mode .top-status {
+    margin-left: auto;
+  }
+
+  .app-shell.sidebar-nav-mode .sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    border: none;
+    background: rgba(8, 12, 24, 0.34);
+    z-index: 29;
+  }
+
+  .app-shell.sidebar-nav-mode .mobile-sidebar {
+    display: grid;
+    align-content: start;
+    gap: 12px;
     position: fixed;
     top: 0;
     left: 0;
     bottom: 0;
-    width: 240px;
-    min-width: 240px;
-    max-width: 240px;
-    z-index: 40;
-  }
-
-  .app-shell.sidebar-nav-mode .dropdown-trigger {
-    display: none;
-  }
-
-  .app-shell.sidebar-nav-mode .dropdown-menu {
-    position: relative;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    max-height: 100%;
-    border-radius: 0;
-    border: none;
+    width: min(320px, 86vw);
+    padding: 14px;
     border-right: 1px solid rgba(219, 159, 117, 0.35);
-    box-shadow: none;
-    padding: 12px;
+    background: linear-gradient(160deg, #2f3a32, #545748);
+    transform: translateX(-102%);
+    transition: transform 0.22s ease;
+    z-index: 30;
+    box-shadow: 0 26px 48px rgba(0, 0, 0, 0.4);
   }
 
-  .app-shell.sidebar-nav-mode .top-bar,
-  .app-shell.sidebar-nav-mode .chat-stage,
-  .app-shell.sidebar-nav-mode .composer-shell {
-    margin-left: 240px;
+  .app-shell.sidebar-nav-mode .mobile-sidebar.open {
+    transform: translateX(0);
+  }
+
+  .mobile-sidebar-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    color: #f2e4d7;
+  }
+
+  .mobile-sidebar-header h4 {
+    margin: 0;
+    font-size: 16px;
+  }
+
+  .sidebar-close {
+    width: 34px;
+    height: 34px;
+    border: none;
+    border-radius: 8px;
+    background: rgba(18, 35, 42, 0.38);
+    color: #f3e7dd;
+    cursor: pointer;
+  }
+
+  .mobile-sidebar .collection-dropdown {
+    min-width: 0;
+    max-width: none;
+    width: 100%;
+  }
+
+  .mobile-sidebar .dropdown-menu {
+    position: relative;
+    top: 8px;
+    left: 0;
+    max-height: min(56vh, 420px);
+    width: 100%;
+  }
+
+  .mobile-sidebar-actions {
+    display: grid;
+    gap: 10px;
+  }
+
+  .mobile-sidebar-actions .admin-btn {
+    width: 100%;
+    text-align: left;
+    color: #f4ddca;
+    border-color: rgba(219, 159, 117, 0.55);
+    background: rgba(18, 35, 42, 0.25);
   }
 }
 
 @media (max-width: 680px) {
-  .app-shell.sidebar-nav-mode .collection-dropdown {
-    width: 190px;
-    min-width: 190px;
-    max-width: 190px;
-  }
-
-  .app-shell.sidebar-nav-mode .top-bar,
-  .app-shell.sidebar-nav-mode .chat-stage,
-  .app-shell.sidebar-nav-mode .composer-shell {
-    margin-left: 190px;
-  }
-
   .top-status {
-    margin-left: 0;
-    width: 100%;
-    justify-content: flex-end;
+    font-size: 12px;
   }
 
   .collection-dropdown {

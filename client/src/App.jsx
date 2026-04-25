@@ -71,6 +71,7 @@ function App() {
   const [isCreateCollectionOpen, setIsCreateCollectionOpen] = useState(false);
   const [isAttachmentOpen, setIsAttachmentOpen] = useState(false);
   const [isSidebarNavMode, setIsSidebarNavMode] = useState(window.innerWidth <= 1024);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [composerText, setComposerText] = useState("");
   const [renamingFileId, setRenamingFileId] = useState(null);
   const [renamingFileName, setRenamingFileName] = useState("");
@@ -103,7 +104,6 @@ function App() {
   const videosInputRef = useRef(null);
   
   const selectedCollection = collections.find((c) => c._id === selectedCollectionId);
-  const shouldShowCollectionMenu = isSidebarNavMode || isCollectionMenuOpen;
   const currentPending = pendingUploads.filter((p) => p.collectionId === selectedCollectionId);
   const canWrite = isAdmin || permissions.canWrite;
   const canDelete = isAdmin || permissions.canDelete;
@@ -213,8 +213,8 @@ function App() {
     const handleResize = () => {
       const isCompact = window.innerWidth <= 1024;
       setIsSidebarNavMode(isCompact);
-      if (isCompact) {
-        setIsCollectionMenuOpen(true);
+      if (!isCompact) {
+        setIsSidebarOpen(false);
       }
     };
 
@@ -224,12 +224,6 @@ function App() {
       window.removeEventListener("resize", handleResize);
     };
   }, []);
-
-  useEffect(() => {
-    if (isSidebarNavMode) {
-      setIsCollectionMenuOpen(true);
-    }
-  }, [isSidebarNavMode]);
 
   useEffect(() => {
     const handleOnline = () => {
@@ -677,6 +671,39 @@ function App() {
     window.location.reload();
   };
 
+  const renderCollectionDropdown = (inSidebar = false) => (
+    <div className={`collection-dropdown ${isCollectionMenuOpen ? "open" : ""} ${inSidebar ? "mobile-collection-dropdown" : ""}`}>
+      <button className="dropdown-trigger" onClick={() => setIsCollectionMenuOpen((p) => !p)}>
+        <span>{selectedCollection?.name || "My Collection"}</span>
+        <span className="caret">▾</span>
+      </button>
+      {isCollectionMenuOpen && (
+        <div className="dropdown-menu">
+          <div className="menu-list">
+            {collections.map((col) => (
+              <div key={col._id} className={`menu-item ${selectedCollectionId === col._id ? "active" : ""}`} onClick={() => { setSelectedCollectionId(col._id); setIsCollectionMenuOpen(false); if (inSidebar) setIsSidebarOpen(false); }}>
+                {renamingCollectionId === col._id ? (
+                  <input autoFocus value={renamingCollectionName} onChange={(e) => setRenamingCollectionName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") renameCollection(col._id); if (e.key === "Escape") setRenamingCollectionId(null); }} onClick={(e) => e.stopPropagation()} />
+                ) : (
+                  <span onDoubleClick={(e) => { e.stopPropagation(); setRenamingCollectionId(col._id); setRenamingCollectionName(col.name); }}>{col.name}</span>
+                )}
+                  {canDelete && <button className="menu-delete" onClick={(e) => { e.stopPropagation(); deleteCollection(col._id); }} title="Delete">✕</button>}
+              </div>
+            ))}
+          </div>
+          {canWrite && isCreateCollectionOpen ? (
+            <div className="create-collection-inline">
+              <input ref={collectionInputRef} type="text" placeholder="Name" value={newCollectionName} onChange={(e) => setNewCollectionName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") createCollection(); if (e.key === "Escape") { setIsCreateCollectionOpen(false); setNewCollectionName(""); } }} />
+              <button onClick={createCollection} disabled={!newCollectionName.trim()}>Create</button>
+            </div>
+          ) : canWrite ? (
+            <button className="menu-create" onClick={() => setIsCreateCollectionOpen(true)}>+ Create New</button>
+          ) : null}
+        </div>
+      )}
+    </div>
+  );
+
   // Admin Actions
   const fetchAdminData = async () => {
     if (!isAdmin) return;
@@ -802,44 +829,37 @@ function App() {
   return (
     <div className={`app-shell ${isSidebarNavMode ? "sidebar-nav-mode" : ""}`}>
       <header className="top-bar">
-        <div className={`collection-dropdown ${shouldShowCollectionMenu ? "open" : ""} ${isSidebarNavMode ? "sidebar-open" : ""}`}>
-          <button className="dropdown-trigger" onClick={() => { if (!isSidebarNavMode) setIsCollectionMenuOpen(p => !p); }}>
-            <span>{selectedCollection?.name || "My Collection"}</span>
-            <span className="caret">▾</span>
+        {isSidebarNavMode && (
+          <button className="sidebar-toggle" onClick={() => setIsSidebarOpen((p) => !p)} aria-label="Open sidebar menu">
+            ☰
           </button>
-          {shouldShowCollectionMenu && (
-            <div className="dropdown-menu">
-              <div className="menu-list">
-                {collections.map((col) => (
-                  <div key={col._id} className={`menu-item ${selectedCollectionId === col._id ? "active" : ""}`} onClick={() => { setSelectedCollectionId(col._id); if (!isSidebarNavMode) setIsCollectionMenuOpen(false); }}>
-                    {renamingCollectionId === col._id ? (
-                      <input autoFocus value={renamingCollectionName} onChange={(e) => setRenamingCollectionName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") renameCollection(col._id); if (e.key === "Escape") setRenamingCollectionId(null); }} onClick={(e) => e.stopPropagation()} />
-                    ) : (
-                      <span onDoubleClick={(e) => { e.stopPropagation(); setRenamingCollectionId(col._id); setRenamingCollectionName(col.name); }}>{col.name}</span>
-                    )}
-                      {canDelete && <button className="menu-delete" onClick={(e) => { e.stopPropagation(); deleteCollection(col._id); }} title="Delete">✕</button>}
-                  </div>
-                ))}
-              </div>
-              {canWrite && isCreateCollectionOpen ? (
-                <div className="create-collection-inline">
-                  <input ref={collectionInputRef} type="text" placeholder="Name" value={newCollectionName} onChange={(e) => setNewCollectionName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") createCollection(); if (e.key === "Escape") { setIsCreateCollectionOpen(false); setNewCollectionName(""); } }} />
-                  <button onClick={createCollection} disabled={!newCollectionName.trim()}>Create</button>
-                </div>
-              ) : canWrite ? (
-                <button className="menu-create" onClick={() => setIsCreateCollectionOpen(true)}>+ Create New</button>
-              ) : null}
-            </div>
-          )}
-        </div>
+        )}
+        {!isSidebarNavMode && renderCollectionDropdown(false)}
 
         <div className="top-status">
-          {isAdmin && <button className="admin-btn" onClick={() => setIsAdminModalOpen(true)}>Manage Access</button>}
-          <button className="admin-btn" onClick={logoutDevice}>Logout</button>
+          {!isSidebarNavMode && isAdmin && <button className="admin-btn" onClick={() => setIsAdminModalOpen(true)}>Manage Access</button>}
+          {!isSidebarNavMode && <button className="admin-btn" onClick={logoutDevice}>Logout</button>}
           <span className={`status-dot ${isOnline ? "online" : "offline"}`} />
           <span>{isOnline ? "Online" : "Offline"}</span>
         </div>
       </header>
+
+      {isSidebarNavMode && (
+        <>
+          {isSidebarOpen && <button className="sidebar-backdrop" onClick={() => setIsSidebarOpen(false)} aria-label="Close sidebar" />}
+          <aside className={`mobile-sidebar ${isSidebarOpen ? "open" : ""}`}>
+            <div className="mobile-sidebar-header">
+              <h4>SpaceSync</h4>
+              <button className="sidebar-close" onClick={() => setIsSidebarOpen(false)} aria-label="Close sidebar">✕</button>
+            </div>
+            {renderCollectionDropdown(true)}
+            <div className="mobile-sidebar-actions">
+              {isAdmin && <button className="admin-btn" onClick={() => { setIsAdminModalOpen(true); setIsSidebarOpen(false); }}>Manage Access</button>}
+              <button className="admin-btn" onClick={logoutDevice}>Logout</button>
+            </div>
+          </aside>
+        </>
+      )}
 
       <main className="chat-stage">
         {selectedCollectionId ? (

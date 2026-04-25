@@ -110,6 +110,17 @@ mongoose
   .then(() => console.log("MongoDB connected"))
   .catch((err) => console.error("MongoDB connection error", err));
 
+let gridFsBucket = null;
+const getGridFsBucket = () => {
+  if (!mongoose.connection?.db) return null;
+  if (!gridFsBucket) {
+    gridFsBucket = new mongoose.mongo.GridFSBucket(mongoose.connection.db, {
+      bucketName: "spacesyncFiles",
+    });
+  }
+  return gridFsBucket;
+};
+
 const deviceSchema = new mongoose.Schema({
   deviceId: { type: String, required: true, unique: true },
   name: { type: String, required: true },
@@ -131,6 +142,8 @@ const fileSchema = new mongoose.Schema({
   collectionId: { type: mongoose.Schema.Types.ObjectId, ref: "Collection", required: true },
   originalName: { type: String, required: true },
   storedName: { type: String, required: true },
+  storageBackend: { type: String, enum: ["disk", "gridfs"], default: "disk" },
+  gridFsId: { type: mongoose.Schema.Types.ObjectId },
   displayName: { type: String, default: "" },
   mimeType: { type: String, default: "application/octet-stream" },
   size: { type: Number, default: 0 },
@@ -438,6 +451,17 @@ app.delete("/admin/permanent/:logId", ensureDbReady, checkAdmin, async (req, res
   if (log.action === 'deleted_file') {
     const file = await File.findById(log.resourceId);
     if (file) {
+      if (file.storageBackend === "gridfs" && file.gridFsId) {
+        const bucket = getGridFsBucket();
+        if (bucket) {
+          try {
+            await bucket.delete(file.gridFsId);
+          } catch {
+            // Ignore cleanup errors for already-missing GridFS files
+          }
+        }
+      }
+
       const filePath = path.join(uploadsDir, file.storedName);
       if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
       await File.findByIdAndDelete(log.resourceId);
@@ -507,10 +531,38 @@ app.post("/collections/:collectionId/upload", ensureDbReady, checkAccess, checkW
     const collection = await Collection.findById(collectionId);
     if (!collection) return res.status(404).json({ error: "Collection not found" });
 
+    let storageBackend = "disk";
+    let gridFsId;
+    const localFilePath = path.join(uploadsDir, req.file.filename);
+    const bucket = getGridFsBucket();
+
+    if (bucket) {
+      const uploadStream = bucket.openUploadStream(req.file.filename, {
+        contentType: req.file.mimetype,
+        metadata: {
+          originalName: req.file.originalname,
+          uploadedBy: req.device.deviceId,
+        },
+      });
+
+      await new Promise((resolve, reject) => {
+        fs.createReadStream(localFilePath)
+          .pipe(uploadStream)
+          .on("error", reject)
+          .on("finish", resolve);
+      });
+
+      storageBackend = "gridfs";
+      gridFsId = uploadStream.id;
+      fs.unlink(localFilePath, () => {});
+    }
+
     const fileDoc = await File.create({
       collectionId,
       originalName: req.file.originalname,
       storedName: req.file.filename,
+      storageBackend,
+      gridFsId,
       displayName: req.file.originalname,
       mimeType: req.file.mimetype,
       size: req.file.size,
@@ -566,11 +618,30 @@ app.get("/files/:fileId/download", ensureDbReady, checkAccess, async (req, res) 
     const file = await File.findOne({ _id: req.params.fileId, isDeleted: false }).lean();
     if (!file) return res.status(404).json({ error: "File not found" });
 
-    const filePath = path.join(uploadsDir, file.storedName);
-    if (!fs.existsSync(filePath)) return res.status(404).json({ error: "Stored file missing" });
-
     const requestedName = (file.displayName || file.originalName || "download").trim();
     const safeDownloadName = path.basename(requestedName);
+
+    if (file.storageBackend === "gridfs" && file.gridFsId) {
+      const bucket = getGridFsBucket();
+      if (!bucket) return res.status(503).json({ error: "File storage is not ready" });
+
+      res.attachment(safeDownloadName);
+      res.setHeader("Content-Type", file.mimeType || "application/octet-stream");
+
+      const downloadStream = bucket.openDownloadStream(file.gridFsId);
+      downloadStream.on("error", () => {
+        if (!res.headersSent) {
+          res.status(404).json({ error: "Stored file missing" });
+        } else {
+          res.end();
+        }
+      });
+      downloadStream.pipe(res);
+      return;
+    }
+
+    const filePath = path.join(uploadsDir, file.storedName);
+    if (!fs.existsSync(filePath)) return res.status(404).json({ error: "Stored file missing" });
     return res.download(filePath, safeDownloadName);
   } catch (err) {
     return res.status(500).json({ error: err.message });

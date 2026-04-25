@@ -625,7 +625,11 @@ function App() {
       window.URL.revokeObjectURL(objectUrl);
       setSyncMessage("Download started");
     } catch (err) {
-      setSyncMessage(getApiError(err, "Failed to download file"));
+      if (err?.response?.status === 404) {
+        setSyncMessage("File is not available on server anymore. Please re-upload it.");
+      } else {
+        setSyncMessage(getApiError(err, "Failed to download file"));
+      }
     } finally {
       setDownloadingFileId("");
     }
@@ -707,13 +711,15 @@ function App() {
     window.location.reload();
   };
 
-  const renderCollectionDropdown = (inSidebar = false) => (
+  const renderCollectionDropdown = (inSidebar = false, alwaysOpen = false) => (
     <div className={`collection-dropdown ${isCollectionMenuOpen ? "open" : ""} ${inSidebar ? "mobile-collection-dropdown" : ""}`}>
-      <button className="dropdown-trigger" onClick={() => setIsCollectionMenuOpen((p) => !p)}>
-        <span>{selectedCollection?.name || "My Collection"}</span>
-        <span className="caret">▾</span>
-      </button>
-      {isCollectionMenuOpen && (
+      {!alwaysOpen && (
+        <button className="dropdown-trigger" onClick={() => setIsCollectionMenuOpen((p) => !p)}>
+          <span>{selectedCollection?.name || "My Collection"}</span>
+          <span className="caret">▾</span>
+        </button>
+      )}
+      {(alwaysOpen || isCollectionMenuOpen) && (
         <div className="dropdown-menu">
           <div className="menu-list">
             {collections.map((col) => (
@@ -869,7 +875,21 @@ function App() {
   }
 
   return (
-    <div className={`app-shell ${isSidebarNavMode ? "sidebar-nav-mode" : ""}`}>
+    <div className={`app-shell ${isSidebarNavMode ? "sidebar-nav-mode" : "desktop-sidebar-mode"}`}>
+      {!isSidebarNavMode && (
+        <aside className="desktop-sidebar">
+          <div className="desktop-sidebar-header">
+            <img src="/favicon.svg" alt="SpaceSync logo" className="app-logo" />
+            <h4>Collections</h4>
+          </div>
+          {renderCollectionDropdown(true, true)}
+          <div className="desktop-sidebar-actions">
+            {isAdmin && <button className="admin-btn" onClick={() => setIsAdminModalOpen(true)}>Manage Access</button>}
+            <button className="admin-btn" onClick={logoutDevice}>Logout</button>
+          </div>
+        </aside>
+      )}
+
       <header className="top-bar">
         <div className="app-brand" title="SpaceSync">
           <img src="/favicon.svg" alt="SpaceSync logo" className="app-logo" />
@@ -880,11 +900,7 @@ function App() {
             ☰
           </button>
         )}
-        {!isSidebarNavMode && renderCollectionDropdown(false)}
-
         <div className="top-status">
-          {!isSidebarNavMode && isAdmin && <button className="admin-btn" onClick={() => setIsAdminModalOpen(true)}>Manage Access</button>}
-          {!isSidebarNavMode && <button className="admin-btn" onClick={logoutDevice}>Logout</button>}
           <span className={`status-dot ${isOnline ? "online" : "offline"}`} />
           <span>{isOnline ? "Online" : "Offline"}</span>
         </div>

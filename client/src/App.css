@@ -12,6 +12,70 @@
   overflow: hidden;
 }
 
+.app-shell.desktop-sidebar-mode {
+  width: min(1120px, calc(100vw - 24px));
+  grid-template-columns: 280px minmax(0, 1fr);
+  grid-template-rows: auto 1fr auto;
+}
+
+.desktop-sidebar {
+  grid-column: 1;
+  grid-row: 1 / 4;
+  border-right: 1px solid rgba(219, 159, 117, 0.35);
+  background: linear-gradient(160deg, #2f3a32, #545748);
+  padding: 12px;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  gap: 12px;
+}
+
+.desktop-sidebar-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #f4e7db;
+}
+
+.desktop-sidebar-header h4 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.desktop-sidebar .collection-dropdown {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+}
+
+.desktop-sidebar .dropdown-menu {
+  position: relative;
+  top: 0;
+  left: 0;
+  width: 100%;
+  max-height: 100%;
+  border-radius: 12px;
+  box-shadow: none;
+}
+
+.desktop-sidebar-actions {
+  display: grid;
+  gap: 10px;
+}
+
+.desktop-sidebar-actions .admin-btn {
+  width: 100%;
+  text-align: left;
+  color: #f4ddca;
+  border-color: rgba(219, 159, 117, 0.55);
+  background: rgba(18, 35, 42, 0.25);
+}
+
+.app-shell.desktop-sidebar-mode .top-bar,
+.app-shell.desktop-sidebar-mode .chat-stage,
+.app-shell.desktop-sidebar-mode .composer-shell {
+  grid-column: 2;
+}
+
 .top-bar {
   position: relative;
   z-index: 5;
@@ -624,6 +688,14 @@
     height: 100vh;
     margin: 0;
     border-radius: 0;
+  }
+
+  .app-shell.desktop-sidebar-mode {
+    grid-template-columns: 1fr;
+  }
+
+  .desktop-sidebar {
+    display: none;
   }
 
   .top-bar {

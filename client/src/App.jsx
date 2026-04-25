@@ -600,8 +600,21 @@ function App() {
     if (!file?._id) return;
     try {
       setDownloadingFileId(file._id);
-      const res = await api.get(`/files/${file._id}/download`, { responseType: "blob" });
-      const blob = new Blob([res.data], { type: res.headers["content-type"] || file.mimeType || "application/octet-stream" });
+      let res;
+      try {
+        res = await api.get(`/files/${file._id}/download`, { responseType: "blob" });
+      } catch (err) {
+        if (err?.response?.status === 404 && file.downloadUrl) {
+          // Backward-compatible fallback for servers that only expose /uploads/:filename
+          res = await api.get(file.downloadUrl, { responseType: "blob" });
+        } else {
+          throw err;
+        }
+      }
+
+      const blob = new Blob([res.data], {
+        type: res.headers["content-type"] || file.mimeType || "application/octet-stream",
+      });
       const objectUrl = window.URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = objectUrl;

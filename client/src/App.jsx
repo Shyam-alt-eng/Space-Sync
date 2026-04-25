@@ -70,6 +70,7 @@ function App() {
   const [isCollectionMenuOpen, setIsCollectionMenuOpen] = useState(false);
   const [isCreateCollectionOpen, setIsCreateCollectionOpen] = useState(false);
   const [isAttachmentOpen, setIsAttachmentOpen] = useState(false);
+  const [isSidebarNavMode, setIsSidebarNavMode] = useState(window.innerWidth <= 1024);
   const [composerText, setComposerText] = useState("");
   const [renamingFileId, setRenamingFileId] = useState(null);
   const [renamingFileName, setRenamingFileName] = useState("");
@@ -102,6 +103,7 @@ function App() {
   const videosInputRef = useRef(null);
   
   const selectedCollection = collections.find((c) => c._id === selectedCollectionId);
+  const shouldShowCollectionMenu = isSidebarNavMode || isCollectionMenuOpen;
   const currentPending = pendingUploads.filter((p) => p.collectionId === selectedCollectionId);
   const canWrite = isAdmin || permissions.canWrite;
   const canDelete = isAdmin || permissions.canDelete;
@@ -206,6 +208,28 @@ function App() {
   useEffect(() => {
     refreshAccessState();
   }, []);
+
+  useEffect(() => {
+    const handleResize = () => {
+      const isCompact = window.innerWidth <= 1024;
+      setIsSidebarNavMode(isCompact);
+      if (isCompact) {
+        setIsCollectionMenuOpen(true);
+      }
+    };
+
+    handleResize();
+    window.addEventListener("resize", handleResize);
+    return () => {
+      window.removeEventListener("resize", handleResize);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (isSidebarNavMode) {
+      setIsCollectionMenuOpen(true);
+    }
+  }, [isSidebarNavMode]);
 
   useEffect(() => {
     const handleOnline = () => {
@@ -776,18 +800,18 @@ function App() {
   }
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${isSidebarNavMode ? "sidebar-nav-mode" : ""}`}>
       <header className="top-bar">
-        <div className={`collection-dropdown ${isCollectionMenuOpen ? "open" : ""}`}>
-          <button className="dropdown-trigger" onClick={() => setIsCollectionMenuOpen(p => !p)}>
+        <div className={`collection-dropdown ${shouldShowCollectionMenu ? "open" : ""} ${isSidebarNavMode ? "sidebar-open" : ""}`}>
+          <button className="dropdown-trigger" onClick={() => { if (!isSidebarNavMode) setIsCollectionMenuOpen(p => !p); }}>
             <span>{selectedCollection?.name || "My Collection"}</span>
             <span className="caret">▾</span>
           </button>
-          {isCollectionMenuOpen && (
+          {shouldShowCollectionMenu && (
             <div className="dropdown-menu">
               <div className="menu-list">
                 {collections.map((col) => (
-                  <div key={col._id} className={`menu-item ${selectedCollectionId === col._id ? "active" : ""}`} onClick={() => { setSelectedCollectionId(col._id); setIsCollectionMenuOpen(false); }}>
+                  <div key={col._id} className={`menu-item ${selectedCollectionId === col._id ? "active" : ""}`} onClick={() => { setSelectedCollectionId(col._id); if (!isSidebarNavMode) setIsCollectionMenuOpen(false); }}>
                     {renamingCollectionId === col._id ? (
                       <input autoFocus value={renamingCollectionName} onChange={(e) => setRenamingCollectionName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") renameCollection(col._id); if (e.key === "Escape") setRenamingCollectionId(null); }} onClick={(e) => e.stopPropagation()} />
                     ) : (
@@ -810,7 +834,6 @@ function App() {
         </div>
 
         <div className="top-status">
-          <button className="admin-btn" onClick={refreshWorkspaceData}>Refresh</button>
           {isAdmin && <button className="admin-btn" onClick={() => setIsAdminModalOpen(true)}>Manage Access</button>}
           <button className="admin-btn" onClick={logoutDevice}>Logout</button>
           <span className={`status-dot ${isOnline ? "online" : "offline"}`} />

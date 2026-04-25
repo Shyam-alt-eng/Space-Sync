@@ -103,6 +103,7 @@ The server emits events over Socket.IO whenever something changes:
 
 The client listens for those events and updates the visible timeline without requiring a manual refresh.
 In addition to realtime events, the client performs a silent background refresh every 5 seconds to keep data current without causing visible UI disruption.
+On mobile and iPad sized screens, collection navigation stays open as a left sidebar so users can switch sections quickly without extra taps.
 
 ### 8. Offline mode keeps the app usable
 
